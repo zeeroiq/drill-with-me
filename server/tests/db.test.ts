@@ -8,13 +8,13 @@ import { config } from '../src/config.js';
 import { initDb, closeDb, getDb } from '../src/db/index.js';
 import { runMigrations, type Problem, type TestCase } from '../src/db/schema.js';
 import { seedProblems } from '../src/db/seed.js';
-import { executeJava } from '../src/runner/executor.js';
+import { executeJava } from '../src/runner';
 
 describe('Configuration', () => {
   it('loads valid configuration defaults', () => {
     expect(config.PORT).toBe(3000);
     expect(config.ADMIN_USERNAME).toBe('admin');
-    expect(config.SESSION_SECRET).toBe('javadrill-super-secret-key-change-in-prod');
+    expect(config.SESSION_SECRET).toBe('drill-with-me-super-secret-key-change-in-prod');
     expect(config.EXECUTION_TIMEOUT_MS).toBe(3000);
     expect(config.COMPILE_TIMEOUT_MS).toBe(5000);
     expect(config.MAX_CONCURRENT_RUNS).toBe(3);
@@ -28,7 +28,7 @@ describe('Database Layer & Seed Data', () => {
 
   beforeEach(() => {
     closeDb();
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'javadrill-db-test-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'drill-with-me-db-test-'));
     testDbPath = path.join(tempDir, 'test.db');
   });
 
@@ -191,7 +191,7 @@ describe('Database Layer & Seed Data', () => {
     const db = initDb(testDbPath);
     const twoSum = db.prepare(`SELECT * FROM problems WHERE slug = 'two-sum'`).get() as Problem;
 
-    const javaTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'javadrill-harness-'));
+    const javaTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'drill-with-me-harness-'));
     try {
       // 1. Test with starter code (should execute, fail all tests cleanly)
       fs.writeFileSync(path.join(javaTemp, 'Solution.java'), twoSum.starter_code);
@@ -329,7 +329,7 @@ describe('Database Layer & Seed Data', () => {
     };
 
     for (const prob of problems) {
-      const javaTemp = fs.mkdtempSync(path.join(os.tmpdir(), `javadrill-harness-${prob.slug}-`));
+      const javaTemp = fs.mkdtempSync(path.join(os.tmpdir(), `drill-with-me-harness-${prob.slug}-`));
       try {
         fs.writeFileSync(path.join(javaTemp, 'Solution.java'), solutions[prob.slug]);
         fs.writeFileSync(path.join(javaTemp, 'Main.java'), prob.test_harness_code);

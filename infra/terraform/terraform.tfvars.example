@@ -1,0 +1,10 @@
+project_id           = "your-gcp-project-id"
+region               = "us-central1"
+app_name             = "drill-with-me"
+container_image      = "us-central1-docker.pkg.dev/your-gcp-project-id/drill-with-me/drill-with-me:latest"
+admin_username       = "admin"
+admin_password_hash  = "your-scrypt-password-hash"
+session_secret       = "your-secure-random-session-secret"
+execution_timeout_ms = 3000
+compile_timeout_ms   = 5000
+max_concurrent_runs  = 3

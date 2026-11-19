@@ -62,17 +62,54 @@ if (fs.existsSync(clientDistPath)) {
 }
 
 let server: Server | null = null;
+let isShuttingDown = false;
 
 function shutdown(signal: string): void {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
   console.log(`Received ${signal}. Shutting down gracefully...`);
-  if (server) {
-    server.close(() => {
-      console.log('HTTP server closed.');
+
+  // Safety timeout: forcibly exit after 5000ms if connections remain open,
+  // ensuring completion well inside Cloud Run's 10-second SIGTERM grace period.
+  const forceExitTimer = setTimeout(() => {
+    console.warn('Graceful shutdown timed out after 5000ms. Forcibly closing database and exiting.');
+    try {
       closeDb();
+    } catch (err) {
+      console.error('Error closing database during forced shutdown:', err);
+    }
+    process.exit(0);
+  }, 5000);
+
+  forceExitTimer.unref();
+
+  if (server) {
+    if (typeof server.closeIdleConnections === 'function') {
+      server.closeIdleConnections();
+    }
+
+    server.close((err) => {
+      clearTimeout(forceExitTimer);
+      if (err) {
+        console.error('Error closing HTTP server:', err);
+      } else {
+        console.log('HTTP server closed.');
+      }
+      try {
+        closeDb();
+      } catch (dbErr) {
+        console.error('Error closing database:', dbErr);
+      }
       process.exit(0);
     });
   } else {
-    closeDb();
+    clearTimeout(forceExitTimer);
+    try {
+      closeDb();
+    } catch (dbErr) {
+      console.error('Error closing database:', dbErr);
+    }
     process.exit(0);
   }
 }

@@ -1,0 +1,228 @@
+name: Production Deployment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        type: boolean
+        description: 'Terraform plan only without deploying'
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: 'production-deployment'
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up OpenJDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify compilation and runtime tools
+        run: |
+          set -euo pipefail
+          echo "=== Java Compiler ==="
+          javac -version
+          echo "=== Java Runtime ==="
+          java -version
+          echo "=== Node.js Runtime ==="
+          node -v
+          echo "=== npm CLI ==="
+          npm -v
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Build client and server bundles
+        run: npm run build
+
+  provision-and-deploy:
+    name: Provision & Deploy to Cloud Run
+    needs: test
+    runs-on: ubuntu-latest
+
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ secrets.GCP_REGION || 'us-central1' }}
+      APP_NAME: 'dwm'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Authenticate to Google Cloud via Workload Identity Federation
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+          token_format: 'access_token'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: '1.9.0'
+          terraform_wrapper: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Bootstrap Terraform remote state bucket
+        id: bootstrap_tf_state
+        run: |
+          chmod +x scripts/bootstrap-tf-state.sh
+          ./scripts/bootstrap-tf-state.sh "${GCP_PROJECT_ID}" "${APP_NAME}" "${GCP_REGION}"
+
+      - name: Initialize Terraform
+        working-directory: infra/terraform
+        run: |
+          terraform init -backend-config="bucket=${TF_STATE_BUCKET}"
+
+      - name: Phase 1 - Provision Foundation (APIs & Artifact Registry)
+        working-directory: infra/terraform
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_region: ${{ secrets.GCP_REGION || 'us-central1' }}
+          TF_VAR_app_name: ${{ env.APP_NAME }}
+          TF_VAR_container_image: 'placeholder'
+          TF_VAR_admin_username: ${{ secrets.ADMIN_USERNAME || 'admin' }}
+          TF_VAR_admin_password_hash: ${{ secrets.ADMIN_PASSWORD_HASH }}
+          TF_VAR_session_secret: ${{ secrets.SESSION_SECRET }}
+        run: |
+          echo "=== Provisioning GCP APIs and Artifact Registry Repository ==="
+          terraform apply -auto-approve \
+            -target=google_project_service.services \
+            -target=google_artifact_registry_repository.docker_repo
+
+      - name: Configure Docker authentication for Artifact Registry
+        run: |
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Define Container Image Coordinates
+        run: |
+          IMAGE_BASE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${APP_NAME}-repo/${APP_NAME}"
+          echo "IMAGE_TAG=${IMAGE_BASE}:${{ github.sha }}" >> $GITHUB_ENV
+          echo "IMAGE_LATEST=${IMAGE_BASE}:latest" >> $GITHUB_ENV
+
+      - name: Build and Push Production Container Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event.inputs.dry_run != 'true' }}
+          tags: |
+            ${{ env.IMAGE_TAG }}
+            ${{ env.IMAGE_LATEST }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Phase 2 - Full Infrastructure & Cloud Run Deployment
+        working-directory: infra/terraform
+        env:
+          TF_VAR_project_id: ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_region: ${{ secrets.GCP_REGION || 'us-central1' }}
+          TF_VAR_app_name: ${{ env.APP_NAME }}
+          TF_VAR_container_image: ${{ env.IMAGE_TAG }}
+          TF_VAR_admin_username: ${{ secrets.ADMIN_USERNAME || 'admin' }}
+          TF_VAR_admin_password_hash: ${{ secrets.ADMIN_PASSWORD_HASH }}
+          TF_VAR_session_secret: ${{ secrets.SESSION_SECRET }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "=== DRY RUN: Generating Terraform Execution Plan ==="
+            terraform plan
+          else
+            echo "=== Full Terraform Apply: Cloud Run, Litestream Bucket, IAM & Secrets ==="
+            terraform apply -auto-approve
+          fi
+
+      - name: Post-deployment Smoke Test
+        if: github.event.inputs.dry_run != 'true'
+        working-directory: infra/terraform
+        run: |
+          set -euo pipefail
+          SERVICE_URL=$(terraform output -raw service_url)
+          echo "SERVICE_URL=${SERVICE_URL}" >> $GITHUB_ENV
+          echo "[*] Live Service URL: ${SERVICE_URL}"
+
+          echo "[*] Probing health endpoint (${SERVICE_URL}/health)..."
+          MAX_ATTEMPTS=12
+          SLEEP_SECONDS=5
+          SUCCESS=false
+
+          for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+            echo "    Attempt ${attempt}/${MAX_ATTEMPTS}..."
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${SERVICE_URL}/health" || true)
+            if [ "${HTTP_STATUS}" = "200" ]; then
+              echo "[+] Health check passed with HTTP 200 OK!"
+              SUCCESS=true
+              break
+            else
+              echo "    Received HTTP ${HTTP_STATUS}. Waiting ${SLEEP_SECONDS}s..."
+              sleep "${SLEEP_SECONDS}"
+            fi
+          done
+
+          if [ "${SUCCESS}" != "true" ]; then
+            echo "[-] ERROR: Application failed health check after 60 seconds." >&2
+            exit 1
+          fi
+
+          echo "[*] Verifying admin endpoint authorization (${SERVICE_URL}/api/admin/overview)..."
+          AUTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${SERVICE_URL}/api/admin/overview" || true)
+          if [ "${AUTH_STATUS}" = "401" ]; then
+            echo "[+] Admin route correctly protected with HTTP 401 Unauthorized."
+          else
+            echo "[-] ERROR: Unexpected HTTP response ${AUTH_STATUS} on /api/admin/overview (expected 401)." >&2
+            exit 1
+          fi
+
+      - name: Output Deployment Summary
+        if: always()
+        working-directory: infra/terraform
+        run: |
+          echo "## 🚀 JavaDrill Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "🔍 **Execution Mode:** Dry Run (Terraform plan completed without applying changes)" >> $GITHUB_STEP_SUMMARY
+          else
+            if [ -n "${SERVICE_URL:-}" ]; then
+              echo "✅ **Status:** Successfully Deployed" >> $GITHUB_STEP_SUMMARY
+              echo "- **Live Application URL:** [${SERVICE_URL}](${SERVICE_URL})" >> $GITHUB_STEP_SUMMARY
+              echo "- **Health Check:** \`${SERVICE_URL}/health\` (HTTP 200 OK)" >> $GITHUB_STEP_SUMMARY
+              echo "- **Admin Route Security:** \`${SERVICE_URL}/api/admin/overview\` (HTTP 401 Unauthorized verified)" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### Provisioned Infrastructure" >> $GITHUB_STEP_SUMMARY
+              echo "- **Artifact Registry:** \`$(terraform output -raw artifact_registry_repo 2>/dev/null || echo 'N/A')\`" >> $GITHUB_STEP_SUMMARY
+              echo "- **SQLite Backup Bucket:** \`gs://$(terraform output -raw sqlite_backup_bucket 2>/dev/null || echo 'N/A')\`" >> $GITHUB_STEP_SUMMARY
+              echo "- **Runtime Service Account:** \`$(terraform output -raw runtime_service_account 2>/dev/null || echo 'N/A')\`" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "ℹ️ Workflow completed." >> $GITHUB_STEP_SUMMARY
+            fi
+          fi

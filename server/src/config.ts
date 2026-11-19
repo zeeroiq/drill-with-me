@@ -24,7 +24,7 @@ export const ADMIN_PASSWORD_HASH: string =
   '490fa53ee18bc825940bd4f0fbd18a29:a9f571813f639e182de57cf0731b1eaac868c92ec6c39468519df3cc03e86e64a90a05f325b40e8398cf582bb37ba9400453048a06df27aa1865a8fa65750010';
 export const SESSION_SECRET: string =
   (process.env.NODE_ENV === 'test' ? undefined : process.env.SESSION_SECRET) ||
-  'javadrill-super-secret-key-change-in-prod';
+  'drill-with-me-super-secret-key-change-in-prod';
 export const EXECUTION_TIMEOUT_MS: number = parseInt(process.env.EXECUTION_TIMEOUT_MS || '3000', 10);
 export const COMPILE_TIMEOUT_MS: number = parseInt(process.env.COMPILE_TIMEOUT_MS || '5000', 10);
 export const MAX_CONCURRENT_RUNS: number = parseInt(process.env.MAX_CONCURRENT_RUNS || '3', 10);

@@ -1,0 +1,15 @@
+# ==============================================================================
+# Litestream Configuration for JavaDrill
+# Zero-loss SQLite streaming replication to Google Cloud Storage (GCS)
+# Optimized for GCP Cloud Run Serverless Scale-to-Zero and Always Free Tier
+# ==============================================================================
+
+dbs:
+  - path: /data/app.db
+    replicas:
+      - type: gcs
+        bucket: "${LITESTREAM_GCS_BUCKET}"
+        path: app.db
+        sync-interval: 10s
+        snapshot-interval: 24h
+        retention: 72h

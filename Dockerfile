@@ -1,7 +1,7 @@
 # ==============================================================================
 # JavaDrill Multi-Stage Production Dockerfile
 # Stage 1: Builder (Node.js 22 + build tools for React & TypeScript)
-# Stage 2: Production Runtime (Node.js 22 + OpenJDK 21 JDK sandbox)
+# Stage 2: Production Runtime (Node.js 22 + OpenJDK 21 JDK sandbox + Litestream)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -31,10 +31,10 @@ RUN npm prune --omit=dev
 # ------------------------------------------------------------------------------
 # Stage 2: Production Runtime
 # ------------------------------------------------------------------------------
-FROM eclipse-temurin:21-jdk-bookworm-slim AS runtime
+FROM eclipse-temurin:21-jdk-jammy AS runtime
 
 LABEL maintainer="ZeeroIQ Platform Team"
-LABEL description="DrillWithMe Production Container with Node.js 22 and OpenJDK 21 Sandbox"
+LABEL description="DrillWithMe Production Container with Node.js 22, OpenJDK 21, and Litestream"
 
 # Install curl for container healthcheck and ca-certificates
 RUN apt-get update && \
@@ -44,8 +44,18 @@ RUN apt-get update && \
 # Copy Node.js 22 runtime binaries, npm, and headers from official Node image
 COPY --from=node:22-bookworm-slim /usr/local /usr/local
 
-# Verify during image build that both OpenJDK 21 and Node.js 22 run smoothly
-RUN javac -version && java -version && node -v
+# Install Litestream binary for zero-loss SQLite replication to GCS
+ARG TARGETARCH
+RUN case "${TARGETARCH:-amd64}" in \
+        "arm64") LS_ARCH="arm64" ;; \
+        *)       LS_ARCH="amd64" ;; \
+    esac && \
+    curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/v0.3.13/litestream-v0.3.13-linux-${LS_ARCH}.tar.gz" | \
+    tar -xz -C /usr/local/bin && \
+    chmod +x /usr/local/bin/litestream
+
+# Verify during image build that OpenJDK 21, Node.js 22, and Litestream run smoothly
+RUN javac -version && java -version && node -v && litestream version
 
 # Create dedicated unprivileged non-root user and group
 RUN groupadd -g 10001 appuser && \
@@ -60,6 +70,12 @@ RUN mkdir -p /app /data /tmp && \
     chown -R appuser:appuser /data && \
     chmod 700 /data && \
     chmod 1777 /tmp
+
+# Copy Litestream configuration and entrypoint script
+COPY litestream.yml /etc/litestream.yml
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 644 /etc/litestream.yml && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/litestream
 
 WORKDIR /app
 
@@ -87,5 +103,6 @@ USER appuser
 # Expose HTTP port
 EXPOSE 3000
 
-# Start server entrypoint
+# Set container entrypoint and default command
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "server/dist/index.js"]

@@ -41,3 +41,13 @@ Thumbs.db
 # Build tool caches
 .vite/
 /.agents/
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+

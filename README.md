@@ -15,10 +15,11 @@
 7. [Local Development Setup](#local-development-setup)
 8. [Configuration & Environment](#configuration--environment)
 9. [Running with Docker & Docker Compose](#running-with-docker--docker-compose)
-10. [Production Deployment Guide](#production-deployment-guide)
-11. [API Reference](#api-reference)
-12. [Hidden Admin Portal (`/itsme`)](#hidden-admin-portal-itsme)
-13. [Testing & Quality Assurance](#testing--quality-assurance)
+10. [Google Cloud Serverless Deployment Guide](#google-cloud-serverless-deployment-guide)
+11. [General Production Deployment](#general-production-deployment)
+12. [API Reference](#api-reference)
+13. [Hidden Admin Portal (`/itsme`)](#hidden-admin-portal-itsme)
+14. [Testing & Quality Assurance](#testing--quality-assurance)
 
 ---
 
@@ -35,7 +36,7 @@ The platform is designed to deploy as a **single, self-contained multi-stage Doc
 The application is structured as an npm workspaces monorepo with high cohesion and low coupling:
 
 ```
-javadrill/
+dwm/
 ├── client/                     # React 18 + Vite + Tailwind CSS + Monaco Editor
 │   ├── src/
 │   │   ├── api/                # Typed API client
@@ -205,8 +206,8 @@ java -version  # Expected: openjdk version "21.x.x"
 From the repository root, install workspace dependencies across both `server` and `client`:
 
 ```bash
-git clone https://github.com/your-org/javadrill.git
-cd javadrill
+git clone https://github.com/zeeroiq/drwil-with-me.git
+cd drill-with-me
 
 # Install dependencies for root, server, and client packages
 npm install
@@ -292,7 +293,7 @@ All runtime configuration parameters are driven via environment variables with s
 | `SQLITE_DB_PATH` | String | `./data/app.db` | Absolute or relative file path to the SQLite database. |
 | `ADMIN_USERNAME` | String | `admin` | Username required for `/itsme` login. |
 | `ADMIN_PASSWORD_HASH` | String | *(empty)* | Scrypt salt and hash string (`salt:hexKey`). |
-| `SESSION_SECRET` | String | `javadrill-secret-key` | Secret key used to sign `admin_session` authentication cookies. |
+| `SESSION_SECRET` | String | `drill-with-me-secret-key` | Secret key used to sign `admin_session` authentication cookies. |
 | `EXECUTION_TIMEOUT_MS` | Number | `3000` | Execution timeout in milliseconds for user Java code. |
 | `COMPILE_TIMEOUT_MS` | Number | `5000` | Compilation timeout in milliseconds for `javac`. |
 | `MAX_CONCURRENT_RUNS` | Number | `3` | Maximum number of concurrent Java processes allowed in parallel. |
@@ -315,7 +316,7 @@ docker compose up --build -d
 3. View real-time logs:
 
 ```bash
-docker compose logs -f javadrill
+docker compose logs -f dwm
 ```
 
 4. Check container health status:
@@ -332,24 +333,271 @@ If running with raw Docker:
 
 ```bash
 # 1. Build the production image
-docker build -t javadrill:latest .
+docker build -t dwm:latest .
 
 # 2. Create a named volume for SQLite persistence
-docker volume create javadrill_data
+docker volume create dwm_data
 
 # 3. Run the container
 docker run -d \
-  --name javadrill \
+  --name dwm \
   -p 3000:3000 \
   --env-file .env \
-  -v javadrill_data:/data \
+  -v dwm_data:/data \
   --restart unless-stopped \
-  javadrill:latest
+  dwm:latest
 ```
 
 ---
 
-## Production Deployment Guide
+## Google Cloud Serverless Deployment Guide
+
+JavaDrill is designed to deploy automatically to **Google Cloud Run** using a fully automated, idempotent **GitHub Actions + Terraform** CI/CD pipeline. The architecture is engineered to run permanently within the **Google Cloud Always Free Tier** at **$0/month** while guaranteeing zero data loss for the SQLite database.
+
+```mermaid
+flowchart TD
+    subgraph CI["GitHub Actions CI/CD Pipeline"]
+        Test["Job 1: npm test & build (OpenJDK 21 + Node 22)"]
+        WIF["Keyless OIDC Auth via GCP Workload Identity"]
+        TFBootstrap["Bootstrap Remote State GCS Bucket"]
+        TFPhase1["Phase 1: Targeted Apply (APIs & Artifact Registry)"]
+        DockerBuild["Build & Push Slim Docker Image (GHA Cache)"]
+        TFPhase2["Phase 2: Full Apply (Cloud Run, GCS, IAM, Secrets)"]
+        SmokeTest["Smoke Test (/health 200, /api/admin/overview 401)"]
+        Test --> WIF --> TFBootstrap --> TFPhase1 --> DockerBuild --> TFPhase2 --> SmokeTest
+    end
+
+    subgraph GCP["Google Cloud Platform (Always Free Architecture)"]
+        CR["Cloud Run v2 (Serverless, min=0, max=1, 1Gi RAM, 1 CPU)"]
+        GCS["GCS Bucket (Litestream SQLite WAL Backups)"]
+        AR["Artifact Registry (Docker Images, keep_count=2)"]
+        SM["Secret Manager (Admin Hash & Session Secret)"]
+
+        CR -->|Continuous WAL Replicate| GCS
+        GCS -->|Cold Start Restore| CR
+        SM -->|Inject Env Secrets| CR
+        AR -->|Pull Image| CR
+    end
+```
+
+---
+
+### 1. Overview of the Always Free Architecture
+
+Google Cloud provides generous monthly allowances across core serverless resources that JavaDrill stays well within:
+
+| Resource | GCP Always Free Allowance | JavaDrill Configuration & Guardrail | Steady-State Cost |
+| :--- | :--- | :--- | :--- |
+| **Cloud Run** | 2 Million requests/month<br>180,000 vCPU-seconds<br>360,000 GiB-seconds | `min_instances = 0` (scales to zero when idle)<br>`max_instances = 1` (prevents SQLite split-brain)<br>`cpu_idle = true` (request-based billing only)<br>`startup_cpu_boost = true` (fast cold start) | **$0.00** |
+| **Cloud Storage (GCS)** | 5 GB-months Standard storage<br>5,000 Class A write operations<br>50,000 Class B read operations | 1 bucket for Litestream SQLite WAL replication<br>`sync-interval: 10s`, `snapshot-interval: 24h`<br>Lifecycle rule keeps 5 noncurrent versions / deletes archived >30d | **$0.00** |
+| **Artifact Registry** | 0.5 GB/month storage | Terraform cleanup policy keeps **only the 2 most recent images** and automatically deletes untagged manifests | **$0.00** |
+| **Secret Manager** | 6 active secret versions/month | Exactly **2 active secrets** (`ADMIN_PASSWORD_HASH` and `SESSION_SECRET`) | **$0.00** |
+| **Networking & Add-ons** | Free HTTPS endpoint (`*.run.app`) | **Zero paid add-ons**: No VPC connectors, no Cloud SQL, no Redis, no Cloud NAT, no external Load Balancers | **$0.00** |
+
+---
+
+### 2. One-Time Setup: Workload Identity Federation (`scripts/bootstrap-gcp-wif.sh`)
+
+Deployments authenticate via **Workload Identity Federation (WIF)** using GitHub's OIDC token exchange. This eliminates long-lived, high-risk JSON service account keys.
+
+To set up WIF, run the idempotent bootstrap script from your local machine or Google Cloud Shell:
+
+```bash
+# Make script executable
+chmod +x scripts/bootstrap-gcp-wif.sh
+
+# Run with arguments:
+# ./scripts/bootstrap-gcp-wif.sh <PROJECT_ID> <GITHUB_OWNER> [GITHUB_REPO] [REGION]
+./scripts/bootstrap-gcp-wif.sh my-gcp-project-id my-github-username drill-with-me us-central1
+```
+
+#### What `bootstrap-gcp-wif.sh` Does:
+1. **Enables Required APIs:** `iam.googleapis.com`, `cloudresourcemanager.googleapis.com`, `iamcredentials.googleapis.com`, `sts.googleapis.com`, `serviceusage.googleapis.com`.
+2. **Creates Workload Identity Pool:** `github-actions-pool` (global).
+3. **Creates OIDC Provider:** `github-actions-provider` mapped to `https://token.actions.githubusercontent.com` and restricted by attribute condition strictly to your GitHub repository (`${GITHUB_OWNER}/${GITHUB_REPO}`).
+4. **Creates Deployer Service Account:** `github-actions-deployer@<PROJECT_ID>.iam.gserviceaccount.com`.
+5. **Binds WIF Principal:** Grants `roles/iam.workloadIdentityUser` to tokens issued by your GitHub repository.
+6. **Grants Minimal Required Project IAM Roles:**
+   - `roles/run.admin`: Manage Cloud Run v2 services, revisions, and scaling settings.
+   - `roles/artifactregistry.admin`: Create Docker repositories and push container images.
+   - `roles/storage.admin`: Create and manage GCS buckets for Terraform state and Litestream SQLite replication.
+   - `roles/iam.serviceAccountAdmin`: Create and manage the Cloud Run runtime service account.
+   - `roles/iam.serviceAccountUser`: Attach the runtime service account to Cloud Run.
+   - `roles/secretmanager.admin`: Provision and manage application secrets in Secret Manager.
+   - `roles/serviceusage.serviceUsageAdmin`: Enable required runtime APIs declared in Terraform.
+   - `roles/resourcemanager.projectIamAdmin`: Bind public invoker (`allUsers`) permissions to Cloud Run.
+
+---
+
+### 3. Configuring GitHub Repository Secrets
+
+After running `bootstrap-gcp-wif.sh`, configure the following GitHub Repository Secrets in **Settings > Secrets and variables > Actions**:
+
+| Secret Name | Required / Default | Description & Value |
+| :--- | :--- | :--- |
+| `GCP_PROJECT_ID` | **Required** | Your Google Cloud project ID (e.g. `my-gcp-project-123456`). |
+| `GCP_REGION` | Optional (default: `us-central1`) | Free-tier US region: `us-central1`, `us-east1`, or `us-west1`. |
+| `GCP_WIF_PROVIDER` | **Required** | Full provider path output by the bootstrap script: `projects/<PROJECT_NUM>/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider` |
+| `GCP_WIF_SERVICE_ACCOUNT` | **Required** | Deployer service account email: `github-actions-deployer@<PROJECT_ID>.iam.gserviceaccount.com` |
+| `ADMIN_USERNAME` | Optional (default: `admin`) | Login username for the hidden admin dashboard (`/itsme`). |
+| `ADMIN_PASSWORD_HASH` | **Required** | Scrypt hash generated with: `node scripts/hash-password.mjs <your-password>` |
+| `SESSION_SECRET` | **Required** | Random 32-byte hex secret generated with: `openssl rand -hex 32` |
+
+#### Quick Setup Using GitHub CLI (`gh`):
+
+```bash
+gh secret set GCP_PROJECT_ID --body "my-gcp-project-id"
+gh secret set GCP_REGION --body "us-central1"
+gh secret set GCP_WIF_PROVIDER --body "projects/1234567890/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider"
+gh secret set GCP_WIF_SERVICE_ACCOUNT --body "github-actions-deployer@my-gcp-project-id.iam.gserviceaccount.com"
+gh secret set ADMIN_USERNAME --body "admin"
+gh secret set ADMIN_PASSWORD_HASH --body "$(node scripts/hash-password.mjs 'YourStrongAdminPassword')"
+gh secret set SESSION_SECRET --body "$(openssl rand -hex 32)"
+```
+
+---
+
+### 4. How Litestream SQLite Replication Works with GCS
+
+SQLite writes to a local file in WAL (Write-Ahead Logging) mode. In serverless environments like Cloud Run, container filesystems are ephemeral. **Litestream** solves this by continuously replicating SQLite WAL frames to Google Cloud Storage.
+
+```
++-----------------------------------------------------------------------------------+
+| Container Startup (docker-entrypoint.sh)                                         |
+| 1. Run: litestream restore -if-db-not-exists -if-replica-exists                   |
+|    -> If GCS has a backup, restore /data/app.db before Node boots                |
+| 2. Exec: litestream replicate -exec "node server/dist/index.js"                  |
+|    -> Litestream becomes PID 1, spawns Node.js as a child process                 |
++-----------------------------------------------------------------------------------+
+                                         │
+                                         ▼
++-----------------------------------------------------------------------------------+
+| Running Container (Scale-to-Zero and Active Traffic)                              |
+| - Express & SQLite process requests, visitors, and submissions                    |
+| - Litestream monitors WAL changes and replicates frames to GCS every 10 seconds   |
++-----------------------------------------------------------------------------------+
+                                         │
+                                         ▼
++-----------------------------------------------------------------------------------+
+| Container Teardown / Redeployment (SIGTERM Handling)                              |
+| 1. Cloud Run sends SIGTERM                                                        |
+| 2. Litestream forwards SIGTERM to Node.js                                         |
+| 3. Node.js stops accepting new HTTP connections and calls db.close() cleanly      |
+| 4. Node.js process exits 0                                                        |
+| 5. Litestream flushes all remaining WAL frames to GCS and exits 0                 |
+| Result: Zero Data Loss across cold starts, redeploys, or scale-to-zero events!    |
++-----------------------------------------------------------------------------------+
+```
+
+#### Free-Tier Tuning in `litestream.yml`:
+- `sync-interval: 10s`: Limits GCS Class A write requests during heavy active traffic while ensuring low latency for WAL updates.
+- `snapshot-interval: 24h`: Captures full snapshots once per day to prune transaction logs.
+- `retention: 72h`: Keeps only 3 days of point-in-time recovery data, ensuring total storage is mere megabytes (well below the 5 GB free tier limit).
+
+---
+
+### 5. Manual Disaster Recovery & Point-in-Time Restore
+
+If you ever need to inspect backups, recover corrupted data, or perform a point-in-time restore, you can do so directly from your workstation:
+
+#### 1. Inspect Backup Bucket in GCS
+```bash
+# List backups in the replication bucket
+gcloud storage ls gs://<PROJECT_ID>-drill-with-me-sqlite-data/app.db/
+```
+
+#### 2. Install Litestream Locally
+```bash
+# macOS
+brew install litestream
+
+# Linux
+curl -L -o /tmp/litestream.tar.gz https://github.com/benbjohnson/litestream/releases/download/v0.3.13/litestream-v0.3.13-linux-amd64.tar.gz
+sudo tar -C /usr/local/bin -xzf /tmp/litestream.tar.gz litestream
+```
+
+#### 3. List Backup Generations and Snapshots
+```bash
+litestream generations gs://<PROJECT_ID>-drill-with-me-sqlite-data/app.db
+litestream snapshots gs://<PROJECT_ID>-drill-with-me-sqlite-data/app.db
+```
+
+#### 4. Restore the Database to a Local File
+```bash
+# Restore latest state:
+litestream restore -o ./recovered-app.db gs://<PROJECT_ID>-drill-with-me-sqlite-data/app.db
+
+# Or restore to a specific point in time:
+litestream restore -timestamp "2026-11-19T10:00:00Z" -o ./recovered-app.db gs://<PROJECT_ID>-drill-with-me-sqlite-data/app.db
+```
+
+#### 5. Verify Database Integrity
+```bash
+sqlite3 ./recovered-app.db "PRAGMA integrity_check;"
+sqlite3 ./recovered-app.db "SELECT count(*) FROM visitors; SELECT count(*) FROM submissions;"
+```
+
+---
+
+### 6. Zero-Cost Guardrails & Setting a $1 GCP Billing Budget Alert
+
+To guarantee you never exceed free-tier limits, JavaDrill implements the following structural guardrails:
+
+1. **Cloud Run Concurrency & Instance Capping:**
+   - `max_instances = 1`: Eliminates concurrent database lock contention and limits compute consumption.
+   - `min_instances = 0`: Cloud Run scales to zero when no traffic arrives.
+   - `cpu_idle = true`: You are only billed while an active request is being processed.
+2. **Artifact Registry Automatic Pruning:**
+   - Terraform configures `cleanup_policies` on the Docker repository to retain **only the last 2 image versions** and delete all untagged images. This maintains storage under the 0.5 GB free limit.
+3. **GCS Lifecycle Policies:**
+   - Automatic deletion of noncurrent objects older than 30 days keeps GCS storage well within the 5 GB free tier.
+4. **Secret Manager Active Version Limit:**
+   - Secrets are managed with exactly 2 active versions total (free tier includes 6 active versions).
+
+#### Setting a $1 GCP Billing Budget Alert
+
+To protect against unexpected billing spikes, configure a budget alert in Google Cloud:
+
+##### Via Google Cloud Console:
+1. Open the [GCP Billing Budgets & Alerts Console](https://console.cloud.google.com/billing/budgets).
+2. Click **Create Budget**.
+3. **Name:** `drill-with-me-zero-cost-alert`.
+4. **Projects:** Select your DrillWithMe project.
+5. **Amount Type:** Specified amount -> **$1.00 USD**.
+6. **Actions:**
+   - Check **Trigger on 50% ($0.50), 90% ($0.90), and 100% ($1.00) of budget**.
+   - Check **Send email alerts to billing account administrators**.
+7. Click **Finish**.
+
+##### Via gcloud CLI:
+```bash
+# Get your billing account ID
+BILLING_ACCOUNT=$(gcloud billing accounts list --format="value(name)" | head -n1)
+
+# Create the $1 threshold budget
+gcloud billing budgets create \
+  --billing-account="${BILLING_ACCOUNT}" \
+  --display-name="drill-with-me-zero-cost-guardrail" \
+  --budget-amount=1.00USD \
+  --threshold-rules=percent=0.5,basis=CURRENT_SPEND \
+  --threshold-rules=percent=0.9,basis=CURRENT_SPEND \
+  --threshold-rules=percent=1.0,basis=CURRENT_SPEND \
+  --filter-projects="projects/${PROJECT_ID}"
+```
+
+---
+
+### 7. Triggering Deployment
+
+Once GitHub Secrets are saved, deployment triggers automatically:
+1. **Automated Continuous Deployment:** Push any commit to the `main` branch.
+2. **Manual Dispatch / Dry Run:** Go to **Actions > Production Deployment > Run workflow**.
+   - Toggle `dry_run: true` to execute a `terraform plan` without applying changes.
+   - Toggle `dry_run: false` to execute a full deployment.
+
+---
+
+## General Production Deployment
 
 ### SQLite Persistence Strategy
 
@@ -661,7 +909,7 @@ Every push and pull request to `main` executes the automated CI pipeline:
 3. Verification of `javac`, `java`, `node`, and `npm` availability.
 4. Execution of the full Vitest suite.
 5. Production bundle compilation (`npm run build`).
-6. Clean Docker container build verification (`docker build -t javadrill:ci .`).
+6. Clean Docker container build verification (`docker build -t dwm:ci .`).
 
 ---
 
