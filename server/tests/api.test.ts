@@ -151,7 +151,11 @@ afterAll(() => {
 describe('API Integration Tests', () => {
   // 1. Health Check
   describe('GET /health', () => {
-    it('returns 200 with DB connected and Java available', async () => {
+    it('returns 200 with DB connected and Java available, and DOES NOT track visitors or log visits', async () => {
+      const db = getDb();
+      const initialVisitorCount = (db.prepare('SELECT COUNT(*) as count FROM visitors').get() as any).count;
+      const initialVisitCount = (db.prepare('SELECT COUNT(*) as count FROM page_visits').get() as any).count;
+
       const client = new TestClient();
       const res = await client.request('/health');
       expect(res.status).toBe(200);
@@ -161,14 +165,23 @@ describe('API Integration Tests', () => {
       expect(json.database).toBe('connected');
       expect(json.java).toBe('available');
       expect(json.timestamp).toBeDefined();
+
+      // Verify no visitor_id cookie was assigned for health check
+      expect(client.cookies.get('visitor_id')).toBeUndefined();
+
+      // Verify no visitor record or page_visit log was created
+      const afterVisitorCount = (db.prepare('SELECT COUNT(*) as count FROM visitors').get() as any).count;
+      const afterVisitCount = (db.prepare('SELECT COUNT(*) as count FROM page_visits').get() as any).count;
+      expect(afterVisitorCount).toBe(initialVisitorCount);
+      expect(afterVisitCount).toBe(initialVisitCount);
     });
   });
 
   // 2. Visitor Tracking Middleware
   describe('Visitor Tracking Middleware', () => {
-    it('assigns a new visitor_id cookie when not present', async () => {
+    it('assigns a new visitor_id cookie when not present on user routes', async () => {
       const client = new TestClient();
-      const res = await client.request('/health');
+      const res = await client.request('/api/problems');
       expect(res.status).toBe(200);
 
       const visitorId = client.cookies.get('visitor_id');
@@ -184,14 +197,14 @@ describe('API Integration Tests', () => {
 
     it('increments visit_count on subsequent requests with existing visitor_id', async () => {
       const client = new TestClient();
-      await client.request('/health');
+      await client.request('/api/problems');
       const visitorId = client.cookies.get('visitor_id')!;
 
       const db = getDb();
       const v1 = db.prepare('SELECT visit_count FROM visitors WHERE id = ?').get(visitorId) as any;
       const count1 = v1.visit_count;
 
-      await client.request('/health');
+      await client.request('/api/problems');
       const v2 = db.prepare('SELECT visit_count FROM visitors WHERE id = ?').get(visitorId) as any;
       expect(v2.visit_count).toBe(count1 + 1);
     });

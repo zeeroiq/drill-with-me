@@ -301,7 +301,7 @@ describe('Admin Problem Management & Anonymous Custom Problem Mode', () => {
     visitorAClient = new TestClient();
 
     // First request assigns visitor_id cookie
-    await visitorAClient.request('/health');
+    await visitorAClient.request('/api/problems');
     const visitorCookie = visitorAClient.cookies.get('visitor_id');
     expect(visitorCookie).toBeDefined();
 
@@ -400,7 +400,7 @@ public class Main {
   it("4. Ownership isolation: Visitor B cannot read, update, or run Visitor A's custom problem", async () => {
     visitorBClient = new TestClient();
     // Initialize Visitor B session with a distinct visitor_id
-    await visitorBClient.request('/health');
+    await visitorBClient.request('/api/problems');
 
     const visitorACookie = visitorAClient.cookies.get('visitor_id');
     const visitorBCookie = visitorBClient.cookies.get('visitor_id');

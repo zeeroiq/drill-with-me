@@ -12,10 +12,17 @@ export function hashPassword(plainPassword: string): string {
 }
 
 export function verifyPassword(plainPassword: string, storedHash: string): boolean {
-  if (!storedHash || !storedHash.includes(':')) {
+  if (!storedHash) {
     return false;
   }
-  const [salt, originalHash] = storedHash.split(':');
+  // Robustly extract 32-char hex salt and 128-char hex hash even if wrapped in quotes,
+  // variable assignments, or multi-line generator banners.
+  const match = storedHash.match(/([0-9a-fA-F]{32}):([0-9a-fA-F]{128})/);
+  if (!match) {
+    return false;
+  }
+  const salt = match[1];
+  const originalHash = match[2];
   try {
     const derivedBuffer = crypto.scryptSync(plainPassword, salt, 64);
     const originalBuffer = Buffer.from(originalHash, 'hex');

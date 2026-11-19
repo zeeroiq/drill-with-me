@@ -24,11 +24,13 @@ app.use(cors({ credentials: true, origin: true }));
 app.use(cookieParser());
 app.use(express.json());
 
-// 2. Visitor tracking middleware (assigns visitor_id and logs visits)
+// 2. Health check route (mounted before visitorMiddleware to avoid tracking probes)
+app.use(healthRouter);
+
+// 3. Visitor tracking middleware (assigns visitor_id and logs visits for user requests)
 app.use(visitorMiddleware);
 
-// 3. API Routes
-app.use(healthRouter);
+// 4. API Routes
 app.use('/api/problems', problemsRouter);
 app.use('/api/problems', executeRouter);
 app.use('/api/custom-problems', customProblemsRouter);
@@ -36,7 +38,7 @@ app.use('/api/admin/problems', adminProblemsRouter);
 app.use('/api/admin/custom-problems', adminCustomProblemsRouter);
 app.use('/api/admin', adminRouter);
 
-// 4. Static asset serving & SPA fallback
+// 5. Static asset serving & SPA fallback
 const possibleDistPaths = [
   path.resolve(__dirname, '../../client/dist'),
   path.resolve(__dirname, '../client/dist'),

@@ -6,6 +6,12 @@ import '../types.js';
 const STATIC_EXTENSIONS_REGEX = /\.(js|css|png|jpg|jpeg|gif|svg|ico|map|woff|woff2|ttf|eot|webp|avif)$/i;
 
 export function visitorMiddleware(req: Request, res: Response, next: NextFunction): void {
+  // Completely ignore health checks from visitor tracking, cookies, and page visit logging
+  const requestPath = req.path || '/';
+  if (requestPath === '/health' || requestPath.startsWith('/health/')) {
+    return next();
+  }
+
   try {
     let visitorId = req.cookies?.visitor_id;
 
@@ -53,11 +59,11 @@ export function visitorMiddleware(req: Request, res: Response, next: NextFunctio
     `);
     upsertVisitor.run(visitorId, clientIp, userAgent);
 
-    // Track page visit / API call (filter out static assets)
-    const requestPath = req.path || '/';
+    // Track page visit / API call (filter out static assets and health checks)
     const isStatic = STATIC_EXTENSIONS_REGEX.test(requestPath);
+    const isHealth = requestPath === '/health' || requestPath.startsWith('/health/');
 
-    if (!isStatic) {
+    if (!isStatic && !isHealth) {
       const recordVisit = db.prepare(`
         INSERT INTO page_visits (visitor_id, path, visited_at)
         VALUES (?, ?, CURRENT_TIMESTAMP)

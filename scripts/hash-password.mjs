@@ -31,10 +31,13 @@ if (isMainModule) {
     process.exit(1);
   }
   const hash = hashPassword(password);
-  console.log('\n--- Admin Password Hash Generated ---');
-  console.log(`Password: ${password}`);
-  console.log(`Hash:     ${hash}`);
-  console.log('\nSet this in your .env:');
-  console.log(`ADMIN_PASSWORD_HASH="${hash}"\n`);
+  // Output clean hash to stdout so `$(node scripts/hash-password.mjs '...')` captures only the raw hash string
+  console.log(hash);
+  // Detailed output for interactive terminal users printed to stderr
+  console.error('\n--- Admin Password Hash Generated ---');
+  console.error(`Password: ${password}`);
+  console.error(`Hash:     ${hash}`);
+  console.error('\nSet this in your .env or GitHub Secrets:');
+  console.error(`ADMIN_PASSWORD_HASH="${hash}"\n`);
 }
 
