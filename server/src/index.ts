@@ -119,7 +119,7 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 if (process.env.NODE_ENV !== 'test') {
   initDb();
-  server = app.listen(PORT, () => {
+  server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`JavaDrill server running on port ${PORT}`);
   });
 }

@@ -12,7 +12,7 @@ import { executeJava } from '../src/runner';
 
 describe('Configuration', () => {
   it('loads valid configuration defaults', () => {
-    expect(config.PORT).toBe(3000);
+    expect(config.PORT).toBe(8080);
     expect(config.ADMIN_USERNAME).toBe('admin');
     expect(config.SESSION_SECRET).toBe('drill-with-me-super-secret-key-change-in-prod');
     expect(config.EXECUTION_TIMEOUT_MS).toBe(3000);

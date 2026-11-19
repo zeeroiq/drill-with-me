@@ -90,18 +90,18 @@ COPY --chown=appuser:appuser --from=builder /app/scripts ./scripts
 
 # Set default production environment variables
 ENV NODE_ENV=production \
-    PORT=3000 \
+    PORT=8080 \
     SQLITE_DB_PATH=/data/app.db
 
 # Health check probing the server /health endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:3000/health || exit 1
+  CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
 
 # Run container process as non-root user
 USER appuser
 
 # Expose HTTP port
-EXPOSE 3000
+EXPOSE 8080
 
 # Set container entrypoint and default command
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

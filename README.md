@@ -587,13 +587,77 @@ gcloud billing budgets create \
 
 ---
 
-### 7. Triggering Deployment
+### 7. Controlled Manual Deployment & Branch Protection Policy
 
-Once GitHub Secrets are saved, deployment triggers automatically:
-1. **Automated Continuous Deployment:** Push any commit to the `main` branch.
-2. **Manual Dispatch / Dry Run:** Go to **Actions > Production Deployment > Run workflow**.
-   - Toggle `dry_run: true` to execute a `terraform plan` without applying changes.
-   - Toggle `dry_run: false` to execute a full deployment.
+To guarantee controlled production releases and prevent unintentional deployments, **automatic deployment on push or merge has been deliberately disabled**. Deployments must be manually dispatched, and the `main` branch is protected against unauthorized pushes or unreviewed merges.
+
+```
++-------------------------------------------------------------------------------+
+| Continuous Integration (Automatic on PR & Push to main)                       |
+| -> .github/workflows/ci.yml runs tests, builds, and verifies Docker image     |
++-------------------------------------------------------------------------------+
+                                      │
+                                      ▼
++-------------------------------------------------------------------------------+
+| Branch Protection on 'main' (Enforced via GitHub Ruleset / Protection API)    |
+| -> Direct push to main: BLOCKED for non-admins                                 |
+| -> Pull Request required with passing "Test & Build" status check             |
+| -> Force push & deletion: BLOCKED                                             |
+| -> Admin approval / override authority required                               |
++-------------------------------------------------------------------------------+
+                                      │
+                                      ▼
++-------------------------------------------------------------------------------+
+| Controlled Production Deployment (Manual Trigger via workflow_dispatch)       |
+| -> .github/workflows/deploy.yml triggered ONLY by authorized operator          |
+| -> Enforces execution strictly from protected 'main' branch                   |
+| -> Protected 'production' environment gate requires Repo Admin review          |
++-------------------------------------------------------------------------------+
+```
+
+#### 1. Applying Branch Protection & Environment Gates (`scripts/setup-branch-protection.sh`)
+
+Run the automated setup script using the GitHub CLI (`gh`):
+
+```bash
+# Make script executable
+chmod +x scripts/setup-branch-protection.sh
+
+# Run branch protection setup (auto-detects repo from git origin)
+./scripts/setup-branch-protection.sh
+```
+
+**What this enforces:**
+1. **Blocks Direct Pushes to `main`:** All code changes must go through a pull request.
+2. **Requires Passing CI Checks:** Pull requests cannot be merged unless the `Test & Build` CI workflow passes.
+3. **Restricts Force Pushes & Deletions:** Destructive history rewrites (`git push --force`) and branch deletions on `main` are rejected.
+4. **Enforces Production Environment Gate:** Creates the `production` environment restricted to protected branches (`main`) with the repository administrator as the required reviewer.
+
+#### 2. Manually Triggering a Deployment
+
+When a new release or change has landed on `main` and is ready for production rollout:
+
+##### Via GitHub Web UI:
+1. Navigate to **Actions** > **Production Deployment (Manual Controlled)** in your GitHub repository.
+2. Click **Run workflow**.
+3. Select options:
+   - **Branch:** `main` *(enforced)*.
+   - **Dry run:** `true` (to preview Terraform changes via `terraform plan`) or `false` (for live deployment).
+   - **Target environment:** `production`.
+4. Click the green **Run workflow** button.
+5. If Environment Protection is enabled, the repository administrator will be prompted to approve the deployment before Cloud Run is updated.
+
+##### Via GitHub CLI (`gh`):
+```bash
+# Live deployment from main:
+gh workflow run deploy.yml --ref main -f dry_run=false -f target_env=production
+
+# Dry run only (Terraform plan without applying):
+gh workflow run deploy.yml --ref main -f dry_run=true -f target_env=production
+
+# View running deployment status:
+gh run watch
+```
 
 ---
 

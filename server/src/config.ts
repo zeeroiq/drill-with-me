@@ -16,7 +16,7 @@ export interface AppConfig {
   MAX_CONCURRENT_RUNS: number;
 }
 
-export const PORT: number = parseInt(process.env.PORT || '3000', 10);
+export const PORT: number = parseInt(process.env.PORT || '8080', 10);
 export const SQLITE_DB_PATH: string = process.env.SQLITE_DB_PATH || path.resolve(process.cwd(), 'data/app.db');
 export const ADMIN_USERNAME: string = process.env.ADMIN_USERNAME || 'admin';
 export const ADMIN_PASSWORD_HASH: string =

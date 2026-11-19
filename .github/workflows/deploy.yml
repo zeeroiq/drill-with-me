@@ -1,15 +1,18 @@
-name: Production Deployment
+name: Production Deployment (Manual Controlled)
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       dry_run:
         type: boolean
-        description: 'Terraform plan only without deploying'
+        description: 'Dry run: Run Terraform plan only without applying changes'
         default: false
+      target_env:
+        type: choice
+        description: 'Target deployment environment'
+        options:
+          - production
+        default: production
 
 permissions:
   contents: read
@@ -26,16 +29,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up OpenJDK 21 (Temurin)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '21'
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -65,6 +68,8 @@ jobs:
     name: Provision & Deploy to Cloud Run
     needs: test
     runs-on: ubuntu-latest
+    environment:
+      name: production
 
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -72,6 +77,31 @@ jobs:
       APP_NAME: 'dwm'
 
     steps:
+      - name: Enforce manual deployment policy and protected branch
+        run: |
+          set -euo pipefail
+          echo "=========================================================="
+          echo "  MANUAL CONTROLLED DEPLOYMENT AUDIT"
+          echo "=========================================================="
+          echo "Event:        ${{ github.event_name }}"
+          echo "Triggered By: ${{ github.actor }}"
+          echo "Branch:       ${{ github.ref_name }}"
+          echo "Commit SHA:   ${{ github.sha }}"
+          echo "Dry Run:      ${{ inputs.dry_run }}"
+          echo "Environment:  ${{ inputs.target_env || 'production' }}"
+          echo "=========================================================="
+
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "[-] ERROR: Automatic deployments are disabled. Must be manually triggered via workflow_dispatch." >&2
+            exit 1
+          fi
+
+          if [ "${{ github.ref_name }}" != "main" ]; then
+            echo "[-] ERROR: Controlled production deployments are strictly restricted to the protected 'main' branch." >&2
+            echo "    Current branch is: '${{ github.ref_name }}'" >&2
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v7
 
@@ -207,7 +237,11 @@ jobs:
         if: always()
         working-directory: infra/terraform
         run: |
-          echo "## 🚀 JavaDrill Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 JavaDrill Deployment Summary (Manual Controlled)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 👤 **Triggered Manually By:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 🛡️ **Target Environment:** \`${{ inputs.target_env || 'production' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 🌿 **Source Branch:** \`${{ github.ref_name }}\` (\`${{ github.sha }}\`)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             echo "🔍 **Execution Mode:** Dry Run (Terraform plan completed without applying changes)" >> $GITHUB_STEP_SUMMARY

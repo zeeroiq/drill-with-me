@@ -187,17 +187,12 @@ resource "google_cloud_run_v2_service" "app" {
       }
 
       ports {
-        container_port = 3000
+        container_port = 8080
       }
 
       env {
         name  = "NODE_ENV"
         value = "production"
-      }
-
-      env {
-        name  = "PORT"
-        value = "3000"
       }
 
       env {
@@ -253,7 +248,7 @@ resource "google_cloud_run_v2_service" "app" {
       startup_probe {
         http_get {
           path = "/health"
-          port = 3000
+          port = 8080
         }
         initial_delay_seconds = 2
         period_seconds        = 5
@@ -263,7 +258,7 @@ resource "google_cloud_run_v2_service" "app" {
       liveness_probe {
         http_get {
           path = "/health"
-          port = 3000
+          port = 8080
         }
         period_seconds    = 30
         failure_threshold = 3
