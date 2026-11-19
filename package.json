@@ -1,0 +1,14 @@
+{
+  "name": "java-dril",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=client && npm run build --workspace=server",
+    "start": "node server/dist/index.js",
+    "test": "npm run test --workspace=server"
+  }
+}
